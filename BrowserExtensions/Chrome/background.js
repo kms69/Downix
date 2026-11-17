@@ -830,6 +830,10 @@ async function getFormatsFor(url, options) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return false;
+  if (message.type === 'downixSelectionInfo') {
+    setLinkMenu(message.count | 0, !!message.onLink);
+    return false;
+  }
 
   if (message.type === 'getSettings') {
     settingsReady.then(() => sendResponse({ settings }));
@@ -932,12 +936,58 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Context menus (permission "contextMenus" is required in the manifest)
 // ---------------------------------------------------------------------------
 
+const RDM_LINK_TITLE = 'Download with Downix';
+const RDM_BRAND = (RDM_LINK_TITLE.match(/^Download with (.+)$/) || [])[1] || 'Downix';
+
+// ---------------------------------------------------------------------------
+// Several highlighted links: the link menu item turns into "Download N links"
+// ---------------------------------------------------------------------------
+
+function setLinkMenu(count, onLink) {
+  if (!chrome.contextMenus || !chrome.contextMenus.update) return;
+  const multi = count > 1;
+  chrome.contextMenus.update('rdmLink', {
+    title: multi ? 'Download ' + count + ' links with ' + RDM_BRAND : RDM_LINK_TITLE,
+    visible: multi || !!onLink
+  }, () => { void chrome.runtime.lastError; });
+}
+
+function collectSelectionLinks(tab, frameId) {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabs.sendMessage(tab.id, { type: 'downixCollectSelection' }, { frameId: frameId || 0 }, (res) => {
+        if (chrome.runtime.lastError || !res) resolve([]);
+        else resolve(Array.isArray(res.links) ? res.links : []);
+      });
+    } catch (e) { resolve([]); }
+  });
+}
+
+async function sendBatch(links, tab) {
+  const pageUrl = tab.url || '';
+  const cookie = await getCookieHeader(pageUrl);
+  let cookieHost = '';
+  try { cookieHost = new URL(pageUrl).hostname; } catch (e) { /* no page host */ }
+  const response = await sendNative({
+    type: 'batchRequest',
+    data: {
+      pageUrl, pageTitle: tab.title || '', referer: pageUrl,
+      cookie: cookie || null, cookieHost,
+      userAgent: currentUserAgent() || null,
+      links: links.slice(0, 3000)
+    }
+  });
+  if (!(response && response.success)) {
+    notify('Could not send the links', (response && response.error) || 'Unknown error');
+  }
+}
+
 function createContextMenus() {
   if (!chrome.contextMenus) return;
   chrome.contextMenus.removeAll(() => {
     void chrome.runtime.lastError;
     const make = (props) => chrome.contextMenus.create(props, () => { void chrome.runtime.lastError; });
-    make({ id: 'rdmLink', title: 'Download with Downix', contexts: ['link'] });
+    make({ id: 'rdmLink', title: RDM_LINK_TITLE, contexts: ['link', 'selection'] });
     make({ id: 'rdmMedia', title: 'Download Video/Audio with Downix', contexts: ['video', 'audio'] });
     make({ id: 'rdmPage', title: 'Grab video from this page with Downix', contexts: ['page'] });
   });
@@ -948,6 +998,20 @@ createContextMenus();
 if (chrome.contextMenus && chrome.contextMenus.onClicked) {
   chrome.contextMenus.onClicked.addListener((info, tab) => {
     if (!tab) return;
+    if (info.menuItemId === 'rdmLink' && info.selectionText) {
+      collectSelectionLinks(tab, info.frameId).then((links) => {
+        if (links.length > 1) { sendBatch(links, tab); return; }
+        if (info.linkUrl && isHttpUrl(info.linkUrl)) {
+          sendToApp({
+            url: info.linkUrl,
+            filename: basename(decodeURIComponentSafe(new URL(info.linkUrl).pathname)) || null,
+            referer: tab.url || null,
+            kind: 'file'
+          }).then((r) => { if (!r.ok) notify('Could not send to Rapid Download Manager', r.error); });
+        }
+      });
+      return;
+    }
     if (info.menuItemId === 'rdmLink' && info.linkUrl && isHttpUrl(info.linkUrl)) {
       sendToApp({
         url: info.linkUrl,

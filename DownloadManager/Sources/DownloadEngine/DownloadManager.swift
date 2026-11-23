@@ -74,11 +74,15 @@ class DownloadManager: ObservableObject {
         return task
     }
 
+    /// Queue slot of a restored streaming row that is being replaced by a fresh download (keyed by URL).
+    private var pendingStreamQueue: [URL: (queueID: UUID, index: Int)] = [:]
+
     /// Register a main-list row for a streaming video handled by yt-dlp.
     /// The row is the single source of truth for the list UI; the video
     /// manager pushes status/progress/completion into it.
     @discardableResult
     func trackStreamingVideoTask(id: UUID, url: URL, destination: URL) -> DownloadTask {
+        // (queue slot hand-over: see pendingStreamQueue)
         if let existing = downloadTasks.first(where: { $0.videoTaskID == id }) {
             return existing
         }
@@ -92,6 +96,17 @@ class DownloadManager: ObservableObject {
         row.state = .downloading
         row.lastAttemptAt = Date()
         downloadTasks.append(row)
+        if let slot = pendingStreamQueue.removeValue(forKey: url) {
+            let qm = SchedulerQueueManager.shared
+            qm.assignTask(row.id, to: slot.queueID)
+            if let qi = qm.queues.firstIndex(where: { $0.id == slot.queueID }),
+               let cur = qm.queues[qi].taskIDs.firstIndex(of: row.id) {
+                qm.queues[qi].taskIDs.remove(at: cur)
+                qm.queues[qi].taskIDs.insert(row.id, at: min(slot.index, qm.queues[qi].taskIDs.count))
+                qm.save()
+            }
+            row.schedulerQueueID = slot.queueID
+        }
         saveTaskList()
         return row
     }
@@ -112,6 +127,7 @@ class DownloadManager: ObservableObject {
         row.statusDetail = nil
         recordToHistory(task: row, status: .completed)
         saveTaskList()
+        QueueRunController.shared.taskDidFinish(row)        // one-time processing: leave the queue
     }
 
     func failStreamingVideoTask(id: UUID) {
@@ -136,6 +152,11 @@ class DownloadManager: ObservableObject {
     private func restartRestoredStreaming(_ row: DownloadTask) {
         let url = row.url
         let folder = row.destinationPath
+        // The replacement row is created later; remember the queue slot so it can take it over.
+        let qm = SchedulerQueueManager.shared
+        if let q = qm.queue(for: row.id), let idx = q.taskIDs.firstIndex(of: row.id) {
+            pendingStreamQueue[url] = (q.id, idx)
+        }
         downloadTasks.removeAll { $0.id == row.id }
         saveTaskList()
         _ = VideoDownloadManager.shared.addAndStartDownload(url: url, destinationFolder: folder)

@@ -104,6 +104,18 @@ Open an [issue](https://github.com/kms69/Downix/issues) here. Please include you
 
 ## License
 
-Downix is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+Downix is source-available software under the [PolyForm Noncommercial License 1.0.0](LICENSE.txt). You may read, build and use it for personal and other non-commercial purposes. Commercial use, selling it, or including it in a paid product is not allowed without permission. Copyright (c) 2026 Kaveh.
 
-This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+## Build from source
+
+Requires macOS 13+ and Xcode (the full app, not only the Command Line Tools).
+
+    git clone https://github.com/kms69/Downix.git
+    cd Downix
+    ./bundle_app.sh
+
+The app is created next to the project as `DownloadManager.app`.
+
+## Contributing
+
+Bug reports and pull requests are welcome. Please open an issue first for larger changes so we can agree on the approach.
